@@ -2,6 +2,26 @@
 
 Private Cloudflare Worker for crawling `oceanliners.net`, checking internal and external links, classifying failures and redirects, and exporting audit results for CuratorOS.
 
+## CuratorOS suite
+
+- **CuratorOS:** `https://curator.oceanliners.net/`
+- **Site Health:** `https://site-health.oceanliners.net/`
+- **Curator Indexer:** `https://curator-indexer.oceanliners.net/`
+
+Site Health is the auditing engine in the workflow:
+
+`Scan → Explain → Locate → Recommend → Resolve`
+
+Run an audit here, export the results, then use **Import Scan Results** in CuratorOS. Catalog files belong in **Load Catalog** and are not scan-result files.
+
+## Exchange format
+
+The stable findings contract is documented in [`docs/findings.schema.json`](docs/findings.schema.json).
+
+- File: `findings.json`
+- Schema: `https://oceanliners.net/curatoros/findings.schema.json`
+- Schema version: `1.0`
+
 ## Cloudflare deployment
 
 1. Create or connect a Worker to this GitHub repository.
