@@ -1,0 +1,13 @@
+{
+  "name": "site-health",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Cloudflare Worker for OceanLiners.net site health and source-link auditing.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
