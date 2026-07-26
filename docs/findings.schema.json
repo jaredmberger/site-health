@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oceanliners.net/curatoros/findings.schema.json",
+  "title": "CuratorOS Site Health Findings",
+  "type": "object",
+  "required": ["schema", "schemaVersion", "generator", "generatedAt", "summary", "findings"],
+  "properties": {
+    "schema": { "const": "https://oceanliners.net/curatoros/findings.schema.json" },
+    "schemaVersion": { "const": "1.0" },
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "OceanLiners.net Site Health Auditor" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "site": {
+      "type": "object",
+      "properties": {
+        "origin": { "type": "string", "format": "uri" },
+        "startUrls": { "type": "array", "items": { "type": "string", "format": "uri" } }
+      },
+      "additionalProperties": true
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "summary": {
+      "type": "object",
+      "required": ["pagesScanned", "linksChecked", "findings"],
+      "properties": {
+        "pagesScanned": { "type": "integer", "minimum": 0 },
+        "linksChecked": { "type": "integer", "minimum": 0 },
+        "findings": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "severity", "status", "pageUrl", "targetUrl", "detectedAt"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "severity": { "enum": ["info", "warning", "broken"] },
+          "status": { "enum": ["open", "reviewing", "resolved", "ignored"] },
+          "pageUrl": { "type": "string", "format": "uri" },
+          "pageTitle": { "type": ["string", "null"] },
+          "targetUrl": { "type": "string", "format": "uri" },
+          "finalUrl": { "type": ["string", "null"], "format": "uri" },
+          "httpStatus": { "type": ["integer", "null"] },
+          "label": { "type": ["string", "null"] },
+          "context": { "type": ["string", "null"] },
+          "inSources": { "type": "boolean" },
+          "detectedAt": { "type": "string", "format": "date-time" },
+          "suggestions": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
