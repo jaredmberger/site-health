@@ -516,7 +516,60 @@ const $=id=>document.getElementById(id);
 const api=async(path,params={})=>{const u=new URL(path,location.origin);Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,v));const r=await fetch(u,{headers:{'x-audit-token':$('token').value}});const j=await r.json();if(!r.ok)throw new Error(j.error||'Request failed');return j};
 $('runBtn').onclick=run;$('exportBtn').onclick=exportCsv;$('search').oninput=render;$('severity').onchange=render;$('location').onchange=render;
 async function run(){if(state.running)return;state.running=true;state.queue=[];state.seen=new Set();state.pages=[];state.rows=[];$('exportBtn').disabled=true;render();const start=$('startUrl').value.trim();state.queue.push(start);try{while(state.queue.length){const pageUrl=state.queue.shift();if(state.seen.has(pageUrl))continue;state.seen.add(pageUrl);setStatus('Inspecting '+pageUrl);const page=await api('/api/page',{url:pageUrl});state.pages.push(page);if($('scope').value==='site')for(const link of page.internalLinks||[])if(!state.seen.has(link))state.queue.push(link);for(const link of page.auditLinks||[]){setStatus('Checking '+link.url);const check=await api('/api/check',{url:link.url});let replacement='';if(check.severity==='broken'){const suggestion=await api('/api/suggest',{url:link.url});replacement=suggestion.suggestions?.[0]?.url||'';}state.rows.push({page_url:page.finalUrl,page_title:page.title,checked_url:link.url,anchor_text:link.label,context:link.context,in_sources:link.inSources,status:check.status??'',category:check.category,severity:check.severity,final_url:check.finalUrl||'',replacement_url:replacement});render();}updateStats();}setStatus('Audit complete. Export the CSV and import it into CuratorOS.');$('exportBtn').disabled=!state.rows.length;}catch(e){setStatus(e.message)}finally{state.running=false;}}
-function render(){const q=$('search').value.toLowerCase(),sev=$('severity').value,loc=$('location').value;const rows=state.rows.filter(r=>(!q||[r.page_url,r.checked_url,r.context,r.page_title].join(' ').toLowerCase().includes(q))&&(!sev||r.severity===sev)&&(!loc||(loc==='source'?r.in_sources:!r.in_sources)));$('rows').innerHTML=rows.map(r=>`<tr><td><a href="${esc(r.page_url)}" target="_blank" rel="noopener">${esc(r.page_title||r.page_url)}</a></td><td><a href="${esc(r.checked_url)}" target="_blank" rel="noopener">${esc(r.anchor_text||r.checked_url)}</a></td><td>${r.in_sources?'Source':'Body'}</td><td><span class="pill ${esc(r.severity)}">${esc(r.category)}</span></td><td>${esc(r.status)}</td><td>${r.final_url?`<a href="${esc(r.final_url)}" target="_blank" rel="noopener">Open</a>`:''}</td><td class="small">${esc(r.context)}</td><td class="replacement">${r.replacement_url?`<a href="${esc(r.replacement_url)}" target="_blank" rel="noopener">Suggested replacement</a>`:''}</td></tr>`).join('');updateStats();}
+function render(){
+  const q=$('search').value.toLowerCase();
+  const sev=$('severity').value;
+  const loc=$('location').value;
+
+  const rows=state.rows.filter(r=>
+    (!q||[r.page_url,r.checked_url,r.context,r.page_title]
+      .join(' ')
+      .toLowerCase()
+      .includes(q)) &&
+    (!sev||r.severity===sev) &&
+    (!loc||(loc==='source'?r.in_sources:!r.in_sources))
+  );
+
+  $('rows').innerHTML=rows.map(r=>
+    '<tr>' +
+      '<td><a href="' + esc(r.page_url) +
+        '" target="_blank" rel="noopener">' +
+        esc(r.page_title||r.page_url) +
+      '</a></td>' +
+
+      '<td><a href="' + esc(r.checked_url) +
+        '" target="_blank" rel="noopener">' +
+        esc(r.anchor_text||r.checked_url) +
+      '</a></td>' +
+
+      '<td>' + (r.in_sources?'Source':'Body') + '</td>' +
+
+      '<td><span class="pill ' + esc(r.severity) + '">' +
+        esc(r.category) +
+      '</span></td>' +
+
+      '<td>' + esc(r.status) + '</td>' +
+
+      '<td>' +
+        (r.final_url
+          ? '<a href="' + esc(r.final_url) +
+            '" target="_blank" rel="noopener">Open</a>'
+          : '') +
+      '</td>' +
+
+      '<td class="small">' + esc(r.context) + '</td>' +
+
+      '<td class="replacement">' +
+        (r.replacement_url
+          ? '<a href="' + esc(r.replacement_url) +
+            '" target="_blank" rel="noopener">Suggested replacement</a>'
+          : '') +
+      '</td>' +
+    '</tr>'
+  ).join('');
+
+  updateStats();
+}
 function updateStats(){const s=state.rows.reduce((a,r)=>(a[r.severity]=(a[r.severity]||0)+1,a),{});$('sPages').textContent=state.pages.length;$('sLinks').textContent=state.rows.length;$('sGood').textContent=s.good||0;$('sWarning').textContent=s.warning||0;$('sBroken').textContent=s.broken||0;$('sSources').textContent=state.rows.filter(r=>r.in_sources).length;const total=Math.max(1,state.seen.size+state.queue.length);$('progress').style.width=Math.min(100,state.seen.size/total*100)+'%';}
 function setStatus(v){$('status').textContent=v}
 function exportCsv(){const h=['page_url','page_title','checked_url','anchor_text','context','in_sources','status','category','severity','final_url','replacement_url'];const c=[h.join(','),...state.rows.map(r=>h.map(k=>'"'+String(r[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8'}));a.download='oceanliners-site-health-'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
