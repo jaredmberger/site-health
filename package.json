@@ -4,8 +4,13 @@
   "private": true,
   "description": "Cloudflare Worker for OceanLiners.net site health and source-link auditing.",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "dev": "wrangler dev --config wrangler.toml",
+    "check": "wrangler deploy --dry-run --config wrangler.toml",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "version": "wrangler versions upload --config wrangler.toml"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
