@@ -24,11 +24,23 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
+    if (url.pathname === "/robots.txt") {
+      return new Response("User-agent: *\nDisallow: /\n", {
+        headers: {
+          "content-type": "text/plain; charset=UTF-8",
+          "cache-control": "no-store",
+          "x-robots-tag": "noindex, nofollow, noarchive, nosnippet, noimageindex",
+          ...securityHeaders(),
+        },
+      });
+    }
+
     if (url.pathname === "/") {
       return new Response(DASHBOARD_HTML, {
         headers: {
           "content-type": "text/html; charset=UTF-8",
           "cache-control": "no-store",
+          "x-robots-tag": "noindex, nofollow, noarchive, nosnippet, noimageindex",
           ...securityHeaders(),
         },
       });
@@ -345,88 +357,58 @@ function categorizeResponse(status, redirected) {
 
 function categorizeNetworkError(error) {
   const text = String(error || "").toLowerCase();
-  if (text.includes("timeout") || text.includes("timed out") || text.includes("abort")) return "TIMEOUT";
-  if (text.includes("dns") || text.includes("name") || text.includes("resolve")) return "DNS_ERROR";
-  if (text.includes("tls") || text.includes("ssl") || text.includes("certificate")) return "TLS_ERROR";
+  if (text.includes("timeout") || text.includes("aborted")) return "TIMEOUT";
+  if (text.includes("dns")) return "DNS_ERROR";
+  if (text.includes("tls") || text.includes("certificate")) return "TLS_ERROR";
   return "NETWORK_ERROR";
 }
 
 function severityFor(category) {
   if (["GOOD"].includes(category)) return "good";
-  if (["REDIRECT", "BOT_BLOCKED", "RATE_LIMITED", "AUTH_REQUIRED", "TIMEOUT", "SERVER_ERROR"].includes(category)) return "warning";
+  if (["REDIRECT", "AUTH_REQUIRED", "BOT_BLOCKED", "RATE_LIMITED", "TIMEOUT"].includes(category)) return "warning";
   return "broken";
 }
 
 function categoryLabel(category) {
-  const labels = {
-    GOOD: "Good",
-    REDIRECT: "Redirect",
-    BOT_BLOCKED: "Access blocked",
-    RATE_LIMITED: "Rate limited",
-    AUTH_REQUIRED: "Login required",
-    TIMEOUT: "Timed out",
-    NOT_FOUND: "Not found",
-    SERVER_ERROR: "Server error",
-    CLIENT_ERROR: "Client error",
-    DNS_ERROR: "Domain not found",
-    TLS_ERROR: "Security certificate error",
-    NETWORK_ERROR: "Network error",
-    UNKNOWN: "Unknown",
-  };
-  return labels[category] || category;
-}
-
-function assertSameSitePage(url) {
-  if (url.protocol !== "https:" || url.origin !== SITE_ORIGIN || isAssetPath(url.pathname) || isExcludedPath(url.pathname)) {
-    throw new Error("Only OceanLiners.net HTML pages may be crawled.");
-  }
-}
-
-function assertHttpUrl(url) {
-  if (!/^https?:$/.test(url.protocol)) throw new Error("Only HTTP and HTTPS URLs are supported.");
-  if (isPrivateHostname(url.hostname)) throw new Error("Private or local network addresses are not allowed.");
-}
-
-function isPrivateHostname(hostname) {
-  const host = hostname.toLowerCase();
-  if (["localhost", "0.0.0.0", "::1"].includes(host)) return true;
-  if (/^(?:10\.|127\.|169\.254\.|192\.168\.)/.test(host)) return true;
-  const match = host.match(/^172\.(\d+)\./);
-  return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+  return category.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function parseUrlParam(url, name) {
   const value = url.searchParams.get(name);
-  if (!value) throw new Error(`Missing ${name} parameter.`);
-  let parsed;
-  try { parsed = new URL(value); } catch { throw new Error(`Invalid ${name} URL.`); }
+  if (!value) throw new Error(`Missing ${name}.`);
+  const parsed = new URL(value);
   return parsed;
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+function assertHttpUrl(url) {
+  if (!/^https?:$/.test(url.protocol)) throw new Error("Only HTTP(S) URLs are allowed.");
+}
+
+function assertSameSitePage(url) {
+  assertHttpUrl(url);
+  if (url.origin !== SITE_ORIGIN) throw new Error("Only OceanLiners.net pages may be inspected.");
+}
+
+async function fetchWithTimeout(url, init, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort("Request timed out"), timeoutMs);
+  const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
 function mergeRanges(ranges) {
-  const sorted = ranges.sort((a, b) => a[0] - b[0]);
-  const merged = [];
-  for (const range of sorted) {
-    const last = merged[merged.length - 1];
-    if (!last || range[0] > last[1]) merged.push([...range]);
+  return ranges.sort((a,b) => a[0]-b[0]).reduce((acc, range) => {
+    const last = acc[acc.length - 1];
+    if (!last || range[0] > last[1]) acc.push(range);
     else last[1] = Math.max(last[1], range[1]);
-  }
-  return merged;
+    return acc;
+  }, []);
 }
 
 function extractTitle(html) {
-  const og = html.match(/<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
-  if (og) return cleanText(decodeEntities(og[1]));
   const title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
   return title ? cleanText(stripTags(title[1])).replace(/\s*[—|]\s*Ocean Liner Curator.*$/i, "") : "";
 }
@@ -463,7 +445,7 @@ function safeEqual(a, b) {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=UTF-8", "cache-control": "no-store", ...corsHeaders(), ...securityHeaders() },
+    headers: { "content-type": "application/json; charset=UTF-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow, noarchive, nosnippet, noimageindex", ...corsHeaders(), ...securityHeaders() },
   });
 }
 function corsHeaders() { return { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-audit-token", "access-control-allow-methods": "GET,OPTIONS" }; }
@@ -474,6 +456,8 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+<meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
 <title>OceanLiners.net Site Health Auditor</title>
 <style>
 :root{color-scheme:dark;--bg:#07100e;--panel:#101a17;--panel2:#15211d;--line:#34433d;--text:#f3efe6;--muted:#b7beb8;--brass:#bfa46a;--good:#9ad0a6;--warn:#e3c478;--bad:#e49b96}
