@@ -346,76 +346,89 @@ function categorizeResponse(status, redirected) {
   if (status >= 200 && status < 300) return redirected ? "REDIRECT" : "GOOD";
   if (status >= 300 && status < 400) return "REDIRECT";
   if (status === 401) return "AUTH_REQUIRED";
-  if (status === 403 || status === 406 || status === 451) return "BOT_BLOCKED";
-  if (status === 408) return "TIMEOUT";
+  if (status === 403) return "FORBIDDEN";
+  if (status === 404) return "NOT_FOUND";
+  if (status === 410) return "GONE";
   if (status === 429) return "RATE_LIMITED";
-  if (status === 404 || status === 410) return "NOT_FOUND";
   if (status >= 500) return "SERVER_ERROR";
-  if (status >= 400) return "CLIENT_ERROR";
-  return "UNKNOWN";
+  return "HTTP_ERROR";
 }
 
 function categorizeNetworkError(error) {
-  const text = String(error || "").toLowerCase();
-  if (text.includes("timeout") || text.includes("aborted")) return "TIMEOUT";
-  if (text.includes("dns")) return "DNS_ERROR";
-  if (text.includes("tls") || text.includes("certificate")) return "TLS_ERROR";
+  const value = String(error || "").toLowerCase();
+  if (value.includes("timeout") || value.includes("abort")) return "TIMEOUT";
+  if (value.includes("certificate") || value.includes("ssl") || value.includes("tls")) return "TLS_ERROR";
+  if (value.includes("dns") || value.includes("not known") || value.includes("resolve")) return "DNS_ERROR";
   return "NETWORK_ERROR";
 }
 
 function severityFor(category) {
-  if (["GOOD"].includes(category)) return "good";
-  if (["REDIRECT", "AUTH_REQUIRED", "BOT_BLOCKED", "RATE_LIMITED", "TIMEOUT"].includes(category)) return "warning";
+  if (category === "GOOD") return "good";
+  if (["REDIRECT", "AUTH_REQUIRED", "FORBIDDEN", "RATE_LIMITED", "TIMEOUT"].includes(category)) return "warning";
   return "broken";
 }
 
 function categoryLabel(category) {
-  return category.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  const labels = {
+    GOOD: "Good",
+    REDIRECT: "Redirect",
+    AUTH_REQUIRED: "Authentication required",
+    FORBIDDEN: "Forbidden",
+    NOT_FOUND: "Not found",
+    GONE: "Gone",
+    RATE_LIMITED: "Rate limited",
+    SERVER_ERROR: "Server error",
+    HTTP_ERROR: "HTTP error",
+    TIMEOUT: "Timed out",
+    TLS_ERROR: "TLS error",
+    DNS_ERROR: "DNS error",
+    NETWORK_ERROR: "Network error",
+  };
+  return labels[category] || capitalize(category.toLowerCase().replaceAll("_", " "));
 }
 
-function parseUrlParam(url, name) {
-  const value = url.searchParams.get(name);
-  if (!value) throw new Error(`Missing ${name}.`);
-  const parsed = new URL(value);
-  return parsed;
+function parseUrlParam(requestUrl, name) {
+  const raw = requestUrl.searchParams.get(name);
+  if (!raw) throw new Error(`Missing ${name} parameter.`);
+  let url;
+  try { url = new URL(raw); } catch { throw new Error(`Invalid ${name} URL.`); }
+  return url;
 }
 
 function assertHttpUrl(url) {
-  if (!/^https?:$/.test(url.protocol)) throw new Error("Only HTTP(S) URLs are allowed.");
+  if (!/^https?:$/.test(url.protocol)) throw new Error("Only HTTP and HTTPS URLs can be checked.");
 }
 
 function assertSameSitePage(url) {
   assertHttpUrl(url);
-  if (url.origin !== SITE_ORIGIN) throw new Error("Only OceanLiners.net pages may be inspected.");
-}
-
-async function fetchWithTimeout(url, init, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function mergeRanges(ranges) {
-  return ranges.sort((a,b) => a[0]-b[0]).reduce((acc, range) => {
-    const last = acc[acc.length - 1];
-    if (!last || range[0] > last[1]) acc.push(range);
-    else last[1] = Math.max(last[1], range[1]);
-    return acc;
-  }, []);
+  if (url.origin !== SITE_ORIGIN) throw new Error(`Page must be on ${SITE_ORIGIN}.`);
 }
 
 function extractTitle(html) {
-  const title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
-  return title ? cleanText(stripTags(title[1])).replace(/\s*[—|]\s*Ocean Liner Curator.*$/i, "") : "";
+  const match = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? cleanText(stripTags(match[1])) : "";
 }
 
 function pathToTitle(path) {
-  if (path === "/") return "Homepage";
-  return path.split("/").filter(Boolean).pop().replace(/\.html?$/i, "").split("-").map(capitalize).join(" ");
+  const part = path.split("/").filter(Boolean).pop() || "Homepage";
+  return part.replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function mergeRanges(ranges) {
+  const sorted = ranges.filter(range => range[1] > range[0]).sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || range[0] > last[1]) merged.push([...range]);
+    else last[1] = Math.max(last[1], range[1]);
+  }
+  return merged;
+}
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 function formatWaybackTimestamp(value) {
@@ -461,7 +474,7 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
 <title>OceanLiners.net Site Health Auditor</title>
 <style>
 :root{color-scheme:dark;--bg:#07100e;--panel:#101a17;--panel2:#15211d;--line:#34433d;--text:#f3efe6;--muted:#b7beb8;--brass:#bfa46a;--good:#9ad0a6;--warn:#e3c478;--bad:#e49b96}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#15241f 0,#07100e 48%);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1500px;margin:auto;padding:28px}.suitebar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(8,17,15,.9)}.suitebrand{font-family:Georgia,serif;color:var(--brass);font-size:1.05rem}.suitenav{display:flex;flex-wrap:wrap;gap:8px}.suitenav a{display:inline-flex;align-items:center;min-height:36px;padding:7px 11px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--text);background:#111d19}.suitenav a[aria-current="page"]{border-color:var(--brass);color:var(--brass)}.mast{border:1px solid var(--line);background:rgba(10,17,16,.92);padding:24px;border-radius:18px;box-shadow:0 18px 50px #0008}.eyebrow{letter-spacing:.14em;text-transform:uppercase;color:var(--brass);font-size:.78rem}h1{font-family:Georgia,serif;margin:.25rem 0 .5rem;font-size:clamp(2rem,5vw,3.8rem);font-weight:500}p{color:var(--muted)}.workflow{margin-top:14px;padding:12px 14px;border-left:3px solid var(--brass);background:rgba(191,164,106,.08);color:var(--muted)}.controls,.stats,.filters{display:grid;gap:12px}.controls{grid-template-columns:2fr 1fr 1fr auto;margin-top:20px}.stats{grid-template-columns:repeat(6,1fr);margin:18px 0}.filters{grid-template-columns:2fr repeat(3,1fr);margin:14px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}.stat strong{display:block;font-size:1.7rem;color:var(--brass)}label{font-size:.8rem;color:var(--muted);display:block;margin-bottom:5px}input,select,button{width:100%;border:1px solid var(--line);background:#08110f;color:var(--text);border-radius:9px;padding:11px}button{cursor:pointer;background:linear-gradient(#c7ad73,#a98e56);color:#10110f;font-weight:800;border-color:#dbc38e}button.secondary{background:#17231f;color:var(--text)}button:disabled{opacity:.5;cursor:not-allowed}.bar{height:10px;background:#07100e;border:1px solid var(--line);border-radius:999px;overflow:hidden}.bar>span{display:block;height:100%;width:0;background:var(--brass);transition:width .2s}.status{min-height:24px;margin:10px 0;color:var(--muted)}.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel)}table{width:100%;border-collapse:collapse;min-width:1300px}th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid #293630}th{position:sticky;top:0;background:#17231f;color:var(--brass);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}a{color:#dcc58f}.pill{display:inline-block;border:1px solid;padding:2px 8px;border-radius:999px;white-space:nowrap}.good{color:var(--good);border-color:#476c50}.warning{color:var(--warn);border-color:#756530}.broken{color:var(--bad);border-color:#754541}.small{font-size:.82rem;color:var(--muted)}.replacement{max-width:300px}.hidden{display:none}.suitefooter{margin-top:20px;padding:16px;text-align:center;color:var(--muted);font-size:.86rem}.suitefooter a{margin:0 .35rem}@media(max-width:1000px){.controls,.filters{grid-template-columns:1fr 1fr}.stats{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.suitebar{align-items:flex-start;flex-direction:column}.wrap{padding:14px}.controls,.filters,.stats{grid-template-columns:1fr 1fr}}@media(max-width:480px){.controls,.filters,.stats{grid-template-columns:1fr}.suitenav{width:100%}.suitenav a{flex:1;justify-content:center}}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#15241f 0,#07100e 48%);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1500px;margin:auto;padding:28px}.suitebar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(8,17,15,.9)}.suitebrand{font-family:Georgia,serif;color:var(--brass);font-size:1.05rem}.suitenav{display:flex;flex-wrap:wrap;gap:8px}.suitenav a{display:inline-flex;align-items:center;min-height:36px;padding:7px 11px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--text);background:#111d19}.suitenav a[aria-current="page"]{border-color:var(--brass);color:var(--brass)}.mast{border:1px solid var(--line);background:rgba(10,17,16,.92);padding:24px;border-radius:18px;box-shadow:0 18px 50px #0008}.eyebrow{letter-spacing:.14em;text-transform:uppercase;color:var(--brass);font-size:.78rem}h1{font-family:Georgia,serif;margin:.25rem 0 .5rem;font-size:clamp(2rem,5vw,3.8rem);font-weight:500}p{color:var(--muted)}.workflow{margin-top:14px;padding:12px 14px;border-left:3px solid var(--brass);background:rgba(191,164,106,.08);color:var(--muted)}.controls,.stats,.filters{display:grid;gap:12px}.controls{grid-template-columns:2fr 1fr 1fr 1fr auto;margin-top:20px}.stats{grid-template-columns:repeat(6,1fr);margin:18px 0}.filters{grid-template-columns:2fr repeat(3,1fr);margin:14px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}.stat strong{display:block;font-size:1.7rem;color:var(--brass)}label{font-size:.8rem;color:var(--muted);display:block;margin-bottom:5px}input,select,button{width:100%;border:1px solid var(--line);background:#08110f;color:var(--text);border-radius:9px;padding:11px}button{cursor:pointer;background:linear-gradient(#c7ad73,#a98e56);color:#10110f;font-weight:800;border-color:#dbc38e}button.secondary{background:#17231f;color:var(--text)}button:disabled{opacity:.5;cursor:not-allowed}.bar{height:10px;background:#07100e;border:1px solid var(--line);border-radius:999px;overflow:hidden}.bar>span{display:block;height:100%;width:0;background:var(--brass);transition:width .2s}.status{min-height:24px;margin:10px 0;color:var(--muted)}.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel)}table{width:100%;border-collapse:collapse;min-width:1300px}th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid #293630}th{position:sticky;top:0;background:#17231f;color:var(--brass);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}a{color:#dcc58f}.pill{display:inline-block;border:1px solid;padding:2px 8px;border-radius:999px;white-space:nowrap}.good{color:var(--good);border-color:#476c50}.warning{color:var(--warn);border-color:#756530}.broken{color:var(--bad);border-color:#754541}.small{font-size:.82rem;color:var(--muted)}.replacement{max-width:300px}.hidden{display:none}.suitefooter{margin-top:20px;padding:16px;text-align:center;color:var(--muted);font-size:.86rem}.suitefooter a{margin:0 .35rem}@media(max-width:1100px){.controls{grid-template-columns:1fr 1fr 1fr}.filters{grid-template-columns:1fr 1fr}.stats{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.suitebar{align-items:flex-start;flex-direction:column}.wrap{padding:14px}.controls,.filters,.stats{grid-template-columns:1fr 1fr}}@media(max-width:480px){.controls,.filters,.stats{grid-template-columns:1fr}.suitenav{width:100%}.suitenav a{flex:1;justify-content:center}}
 </style>
 </head>
 <body><main class="wrap">
@@ -477,10 +490,11 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
 <div class="eyebrow">Ocean Liner Curator · Site Maintenance · v2</div>
 <h1>Site Health Auditor</h1>
 <p>Crawl OceanLiners.net, inspect internal navigation and source links, identify broken or redirected destinations, and export a work list for CuratorOS.</p>
-<div class="workflow"><strong>Workflow:</strong> Run the audit, export the CSV, then open CuratorOS and choose <strong>Import Scan Results</strong>. Use Curator Indexer separately when you need a fresh canonical site index.</div>
+<div class="workflow"><strong>Workflow:</strong> Run the audit, export the CSV, then open CuratorOS and choose <strong>Import Scan Results</strong>. Use <strong>Internal body links only</strong> for a faster check of OceanLiners.net links outside Sources/References sections.</div>
 <div class="controls">
 <div><label for="startUrl">Start URL</label><input id="startUrl" value="https://oceanliners.net/"></div>
 <div><label for="scope">Scope</label><select id="scope"><option value="site">Whole site</option><option value="section">Starting section</option></select></div>
+<div><label for="scanMode">Scan mode</label><select id="scanMode"><option value="full">Full audit</option><option value="internal-body">Internal body links only</option></select></div>
 <div><label for="token">Audit token</label><input id="token" type="password" autocomplete="off"></div>
 <div><label>&nbsp;</label><button id="runBtn">Run audit</button></div>
 </div>
@@ -495,67 +509,61 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
 <div class="tablewrap"><table><thead><tr><th>Page</th><th>Link</th><th>Location</th><th>Status</th><th>HTTP</th><th>Final URL</th><th>Context</th><th>Replacement</th></tr></thead><tbody id="rows"></tbody></table></div>
 <footer class="suitefooter">CuratorOS Suite · <a href="https://curator.oceanliners.net/">Review findings</a> · <a href="https://curator-indexer.oceanliners.net/">Build site index</a> · <a href="https://oceanliners.net/">Open OceanLiners.net</a></footer>
 </main><script>
+const SITE_ORIGIN='https://oceanliners.net';
 const state={queue:[],seen:new Set(),pages:[],rows:[],running:false};
 const $=id=>document.getElementById(id);
 const api=async(path,params={})=>{const u=new URL(path,location.origin);Object.entries(params).forEach(([k,v])=>u.searchParams.set(k,v));const r=await fetch(u,{headers:{'x-audit-token':$('token').value}});const j=await r.json();if(!r.ok)throw new Error(j.error||'Request failed');return j};
 $('runBtn').onclick=run;$('exportBtn').onclick=exportCsv;$('search').oninput=render;$('severity').onchange=render;$('location').onchange=render;
-async function run(){if(state.running)return;state.running=true;state.queue=[];state.seen=new Set();state.pages=[];state.rows=[];$('exportBtn').disabled=true;render();const start=$('startUrl').value.trim();state.queue.push(start);try{while(state.queue.length){const pageUrl=state.queue.shift();if(state.seen.has(pageUrl))continue;state.seen.add(pageUrl);setStatus('Inspecting '+pageUrl);const page=await api('/api/page',{url:pageUrl});state.pages.push(page);if($('scope').value==='site')for(const link of page.internalLinks||[])if(!state.seen.has(link))state.queue.push(link);for(const link of page.auditLinks||[]){setStatus('Checking '+link.url);const check=await api('/api/check',{url:link.url});let replacement='';if(check.severity==='broken'){const suggestion=await api('/api/suggest',{url:link.url});replacement=suggestion.suggestions?.[0]?.url||'';}state.rows.push({page_url:page.finalUrl,page_title:page.title,checked_url:link.url,anchor_text:link.label,context:link.context,in_sources:link.inSources,status:check.status??'',category:check.category,severity:check.severity,final_url:check.finalUrl||'',replacement_url:replacement});render();}updateStats();}setStatus('Audit complete. Export the CSV and import it into CuratorOS.');$('exportBtn').disabled=!state.rows.length;}catch(e){setStatus(e.message)}finally{state.running=false;}}
+async function run(){
+  if(state.running)return;
+  state.running=true;state.queue=[];state.seen=new Set();state.pages=[];state.rows=[];
+  $('exportBtn').disabled=true;render();
+  const start=$('startUrl').value.trim();
+  const mode=$('scanMode').value;
+  state.queue.push(start);
+  try{
+    while(state.queue.length){
+      const pageUrl=state.queue.shift();
+      if(state.seen.has(pageUrl))continue;
+      state.seen.add(pageUrl);
+      setStatus('Inspecting '+pageUrl);
+      const page=await api('/api/page',{url:pageUrl});
+      state.pages.push(page);
+      if($('scope').value==='site'){
+        for(const link of page.internalLinks||[])if(!state.seen.has(link))state.queue.push(link);
+      }
+      const links=(page.auditLinks||[]).filter(link=>{
+        if(mode!=='internal-body')return true;
+        if(link.inSources)return false;
+        try{return new URL(link.url).origin===SITE_ORIGIN}catch{return false}
+      });
+      for(const link of links){
+        setStatus((mode==='internal-body'?'Checking internal body link ':'Checking ')+link.url);
+        const check=await api('/api/check',{url:link.url});
+        let replacement='';
+        if(mode==='full'&&check.severity==='broken'){
+          const suggestion=await api('/api/suggest',{url:link.url});
+          replacement=suggestion.suggestions?.[0]?.url||'';
+        }
+        state.rows.push({page_url:page.finalUrl,page_title:page.title,checked_url:link.url,anchor_text:link.label,context:link.context,in_sources:link.inSources,status:check.status??'',category:check.category,severity:check.severity,final_url:check.finalUrl||'',replacement_url:replacement});
+        render();
+      }
+      updateStats();
+    }
+    setStatus(mode==='internal-body'?'Internal body-link scan complete. Export the CSV and import it into CuratorOS.':'Audit complete. Export the CSV and import it into CuratorOS.');
+    $('exportBtn').disabled=!state.rows.length;
+  }catch(e){setStatus(e.message)}finally{state.running=false}
+}
 function render(){
   const q=$('search').value.toLowerCase();
   const sev=$('severity').value;
   const loc=$('location').value;
-
-  const rows=state.rows.filter(r=>
-    (!q||[r.page_url,r.checked_url,r.context,r.page_title]
-      .join(' ')
-      .toLowerCase()
-      .includes(q)) &&
-    (!sev||r.severity===sev) &&
-    (!loc||(loc==='source'?r.in_sources:!r.in_sources))
-  );
-
-  $('rows').innerHTML=rows.map(r=>
-    '<tr>' +
-      '<td><a href="' + esc(r.page_url) +
-        '" target="_blank" rel="noopener">' +
-        esc(r.page_title||r.page_url) +
-      '</a></td>' +
-
-      '<td><a href="' + esc(r.checked_url) +
-        '" target="_blank" rel="noopener">' +
-        esc(r.anchor_text||r.checked_url) +
-      '</a></td>' +
-
-      '<td>' + (r.in_sources?'Source':'Body') + '</td>' +
-
-      '<td><span class="pill ' + esc(r.severity) + '">' +
-        esc(r.category) +
-      '</span></td>' +
-
-      '<td>' + esc(r.status) + '</td>' +
-
-      '<td>' +
-        (r.final_url
-          ? '<a href="' + esc(r.final_url) +
-            '" target="_blank" rel="noopener">Open</a>'
-          : '') +
-      '</td>' +
-
-      '<td class="small">' + esc(r.context) + '</td>' +
-
-      '<td class="replacement">' +
-        (r.replacement_url
-          ? '<a href="' + esc(r.replacement_url) +
-            '" target="_blank" rel="noopener">Suggested replacement</a>'
-          : '') +
-      '</td>' +
-    '</tr>'
-  ).join('');
-
+  const rows=state.rows.filter(r=>(!q||[r.page_url,r.checked_url,r.context,r.page_title].join(' ').toLowerCase().includes(q))&&(!sev||r.severity===sev)&&(!loc||(loc==='source'?r.in_sources:!r.in_sources)));
+  $('rows').innerHTML=rows.map(r=>'<tr><td><a href="'+esc(r.page_url)+'" target="_blank" rel="noopener">'+esc(r.page_title||r.page_url)+'</a></td><td><a href="'+esc(r.checked_url)+'" target="_blank" rel="noopener">'+esc(r.anchor_text||r.checked_url)+'</a></td><td>'+(r.in_sources?'Source':'Body')+'</td><td><span class="pill '+esc(r.severity)+'">'+esc(r.category)+'</span></td><td>'+esc(r.status)+'</td><td>'+(r.final_url?'<a href="'+esc(r.final_url)+'" target="_blank" rel="noopener">Open</a>':'')+'</td><td class="small">'+esc(r.context)+'</td><td class="replacement">'+(r.replacement_url?'<a href="'+esc(r.replacement_url)+'" target="_blank" rel="noopener">Suggested replacement</a>':'')+'</td></tr>').join('');
   updateStats();
 }
 function updateStats(){const s=state.rows.reduce((a,r)=>(a[r.severity]=(a[r.severity]||0)+1,a),{});$('sPages').textContent=state.pages.length;$('sLinks').textContent=state.rows.length;$('sGood').textContent=s.good||0;$('sWarning').textContent=s.warning||0;$('sBroken').textContent=s.broken||0;$('sSources').textContent=state.rows.filter(r=>r.in_sources).length;const total=Math.max(1,state.seen.size+state.queue.length);$('progress').style.width=Math.min(100,state.seen.size/total*100)+'%';}
 function setStatus(v){$('status').textContent=v}
-function exportCsv(){const h=['page_url','page_title','checked_url','anchor_text','context','in_sources','status','category','severity','final_url','replacement_url'];const c=[h.join(','),...state.rows.map(r=>h.map(k=>'"'+String(r[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8'}));a.download='oceanliners-site-health-'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function exportCsv(){const h=['page_url','page_title','checked_url','anchor_text','context','in_sources','status','category','severity','final_url','replacement_url'];const c=[h.join(','),...state.rows.map(r=>h.map(k=>'"'+String(r[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8'}));a.download='oceanliners-site-health-'+($('scanMode').value==='internal-body'?'internal-body-':'')+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script></body></html>`;
