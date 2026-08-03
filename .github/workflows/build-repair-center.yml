@@ -1,0 +1,44 @@
+name: Build Site Health Repair Center
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/repair-center
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply Repair Center patch
+        run: python3 scripts/apply-repair-center.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Worker build
+        run: npm run check
+
+      - name: Commit generated feature
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/index.js
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 1
+          fi
+          git commit -m "Add GitHub-backed Site Health Repair Center"
+          git push origin HEAD:feature/repair-center
