@@ -20,13 +20,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Apply Repair Center patch
         run: python3 scripts/apply-repair-center.py
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Validate Worker build
         run: npm run check
@@ -35,7 +34,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/index.js
+          git add src/index.js package-lock.json
           if git diff --cached --quiet; then
             echo "No generated changes to commit."
             exit 1
