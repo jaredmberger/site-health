@@ -45,7 +45,7 @@ export default {
         headers: {
           "content-type": "text/html; charset=UTF-8",
           "cache-control": "no-store",
-          "x-robots-tag": "noindex, nofollow, noarchive, nosnippet, noimageindex",
+          "x-robots-tag": "noindex, nofollow,noarchive,nosnippet,noimageindex",
           ...securityHeaders(),
         },
       });
@@ -711,7 +711,7 @@ function safeEqual(a, b) {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=UTF-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow, noarchive, nosnippet, noimageindex", ...corsHeaders(), ...securityHeaders() },
+    headers: { "content-type": "application/json; charset=UTF-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow,noarchive,nosnippet,noimageindex", ...corsHeaders(), ...securityHeaders() },
   });
 }
 function corsHeaders() { return { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-audit-token", "access-control-allow-methods": "GET,POST,OPTIONS" }; }
@@ -743,11 +743,11 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
 <div class="eyebrow">Ocean Liner Curator · Site Maintenance · v2</div>
 <h1>Site Health Auditor</h1>
 <p>Crawl OceanLiners.net, inspect internal navigation and source links, identify broken or redirected destinations, and export a work list for CuratorOS.</p>
-<div class="workflow"><strong>Workflow:</strong> Run the audit, export the CSV, then open CuratorOS and choose <strong>Import Scan Results</strong>. Use <strong>Internal body links only</strong> for a faster check of OceanLiners.net links outside Sources/References sections.</div>
+<div class="workflow"><strong>Workflow:</strong> Run the audit, export the CSV, then open CuratorOS and choose <strong>Import Scan Results</strong>. Choose <strong>Internal body links only</strong> for page-to-page navigation, <strong>External links only</strong> for off-site destinations, or <strong>Sources/References only</strong> for links in detected citation sections.</div>
 <div class="controls">
 <div><label for="startUrl">Start URL</label><input id="startUrl" value="https://oceanliners.net/"></div>
 <div><label for="scope">Scope</label><select id="scope"><option value="site">Whole site</option><option value="section">Starting section</option></select></div>
-<div><label for="scanMode">Scan mode</label><select id="scanMode"><option value="full">Full audit</option><option value="internal-body">Internal body links only</option></select></div>
+<div><label for="scanMode">Scan mode</label><select id="scanMode"><option value="full">Full audit</option><option value="internal-body">Internal body links only</option><option value="external-only">External links only</option><option value="sources-only">Sources/References only</option></select></div>
 <div><label for="token">Audit token</label><input id="token" type="password" autocomplete="off"></div>
 <div><label>&nbsp;</label><button id="runBtn">Run audit</button></div>
 </div>
@@ -788,15 +788,23 @@ async function run(){
         for(const link of page.internalLinks||[])if(!state.seen.has(link))state.queue.push(link);
       }
       const links=(page.auditLinks||[]).filter(link=>{
-        if(mode!=='internal-body')return true;
-        if(link.inSources)return false;
-        try{return new URL(link.url).origin===SITE_ORIGIN}catch{return false}
+        if(mode==='full')return true;
+        if(mode==='internal-body'){
+          if(link.inSources)return false;
+          try{return new URL(link.url).origin===SITE_ORIGIN}catch{return false}
+        }
+        if(mode==='external-only'){
+          try{return new URL(link.url).origin!==SITE_ORIGIN}catch{return false}
+        }
+        if(mode==='sources-only')return Boolean(link.inSources);
+        return true;
       });
       for(const link of links){
-        setStatus((mode==='internal-body'?'Checking internal body link ':'Checking ')+link.url);
+        const prefix=mode==='internal-body'?'Checking internal body link ':mode==='external-only'?'Checking external link ':mode==='sources-only'?'Checking source/reference link ':'Checking ';
+        setStatus(prefix+link.url);
         const check=await api('/api/check',{url:link.url});
         let replacement='';
-        if(mode==='full'&&check.severity==='broken'){
+        if(mode!=='internal-body'&&check.severity==='broken'){
           const suggestion=await api('/api/suggest',{url:link.url});
           replacement=suggestion.suggestions?.[0]?.url||'';
         }
@@ -805,7 +813,8 @@ async function run(){
       }
       updateStats();
     }
-    setStatus(mode==='internal-body'?'Internal body-link scan complete. Export the CSV and import it into CuratorOS.':'Audit complete. Export the CSV and import it into CuratorOS.');
+    const done=mode==='internal-body'?'Internal body-link scan complete.':mode==='external-only'?'External-link scan complete.':mode==='sources-only'?'Sources/References scan complete.':'Audit complete.';
+    setStatus(done+' Export the CSV and import it into CuratorOS.');
     $('exportBtn').disabled=!state.rows.length;
   }catch(e){setStatus(e.message)}finally{state.running=false}
 }
@@ -824,6 +833,6 @@ function updateRepairButton(){const selected=state.rows.filter(r=>r.repair_selec
 async function createRepairPr(){const selected=state.rows.filter(r=>r.repair_selected&&r.severity==='broken');if(!selected.length)return;const repairs=selected.map(r=>({page_url:r.page_url,old_url:r.checked_url,action:r.repair_action,new_url:r.repair_action==='replace'?(r.repair_new_url||r.replacement_url):''}));if(!confirm('Create a draft GitHub pull request for '+repairs.length+' selected repair'+(repairs.length===1?'':'s')+'? No changes will be written directly to main.'))return;$('repairBtn').disabled=true;$('repairResult').textContent='Validating repairs against the repository…';try{await apiPost('/api/repair/preview',{repairs});$('repairResult').textContent='Validation passed. Creating branch, commit, and draft PR…';const result=await apiPost('/api/repair/create-pr',{repairs});$('repairResult').innerHTML='✓ '+esc(result.repairCount)+' repairs across '+esc(result.fileCount)+' files. <a href="'+esc(result.pullRequestUrl)+'" target="_blank" rel="noopener">Open draft PR #'+esc(result.pullRequestNumber)+'</a>';selected.forEach(r=>r.repair_selected=false);render()}catch(e){$('repairResult').textContent='Repair not created: '+e.message;updateRepairButton()}}
 function updateStats(){const s=state.rows.reduce((a,r)=>(a[r.severity]=(a[r.severity]||0)+1,a),{});$('sPages').textContent=state.pages.length;$('sLinks').textContent=state.rows.length;$('sGood').textContent=s.good||0;$('sWarning').textContent=s.warning||0;$('sBroken').textContent=s.broken||0;$('sSources').textContent=state.rows.filter(r=>r.in_sources).length;const total=Math.max(1,state.seen.size+state.queue.length);$('progress').style.width=Math.min(100,state.seen.size/total*100)+'%';}
 function setStatus(v){$('status').textContent=v}
-function exportCsv(){const h=['page_url','page_title','checked_url','anchor_text','context','in_sources','status','category','severity','final_url','replacement_url'];const c=[h.join(','),...state.rows.map(r=>h.map(k=>'"'+String(r[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8'}));a.download='oceanliners-site-health-'+($('scanMode').value==='internal-body'?'internal-body-':'')+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function exportCsv(){const h=['page_url','page_title','checked_url','anchor_text','context','in_sources','status','category','severity','final_url','replacement_url'];const c=[h.join(','),...state.rows.map(r=>h.map(k=>'"'+String(r[k]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\uFEFF'+c],{type:'text/csv;charset=utf-8'}));const mode=$('scanMode').value;const prefix=mode==='internal-body'?'internal-body-':mode==='external-only'?'external-only-':mode==='sources-only'?'sources-references-':'';a.download='oceanliners-site-health-'+prefix+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script></body></html>`;
