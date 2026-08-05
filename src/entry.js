@@ -1,9 +1,9 @@
 import core from './index.js';
 
 const DEFAULT_LINK_MAP_SNAPSHOT = 'https://link-map.oceanliners.net/api/search-intelligence';
-const CACHE_KEY = 'search-intelligence:site-health:v2';
+const CACHE_KEY = 'search-intelligence:site-health:v3';
 const REFRESH_LOCK_KEY = 'search-intelligence:site-health:refresh-lock';
-const USER_AGENT = 'CuratorOS-Site-Health-Integration/1.1 (+https://oceanliners.net/)';
+const USER_AGENT = 'CuratorOS-Site-Health-Integration/1.0 (+https://oceanliners.net/)';
 
 export default {
   async fetch(request, env, ctx) {
@@ -22,26 +22,19 @@ export default {
         await env.SITE_HEALTH_INTEGRATION_CACHE.put(REFRESH_LOCK_KEY, new Date().toISOString(), { expirationTtl: 300 });
         try {
           const snapshot = await buildSnapshot(env);
-          const compact = compactSnapshot(snapshot);
-          await env.SITE_HEALTH_INTEGRATION_CACHE.put(CACHE_KEY, JSON.stringify(compact), { expirationTtl: 60 * 60 * 24 * 14 });
-          return json(compact);
+          const serialized = JSON.stringify(snapshot);
+          await env.SITE_HEALTH_INTEGRATION_CACHE.put(CACHE_KEY, serialized, { expirationTtl: 60 * 60 * 24 * 14 });
+          return new Response(serialized, { status: 200, headers: jsonHeaders() });
         } catch (error) {
           return json({ ok: false, pages: [], error: error instanceof Error ? error.message : String(error) }, 502);
         }
       }
 
-      const cachedText = await env.SITE_HEALTH_INTEGRATION_CACHE.get(CACHE_KEY);
-      if (!cachedText) {
+      const cached = await env.SITE_HEALTH_INTEGRATION_CACHE.get(CACHE_KEY);
+      if (!cached) {
         return json({ ok: false, pages: [], error: 'No Site Health integration snapshot exists yet. Open /api/search-intelligence?refresh=1 once after deployment.' }, 404);
       }
-      return new Response(cachedText, {
-        status: 200,
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=120',
-          'x-content-type-options': 'nosniff',
-        },
-      });
+      return new Response(cached, { status: 200, headers: jsonHeaders() });
     }
 
     return core.fetch(request, env, ctx);
@@ -70,33 +63,23 @@ async function buildSnapshot(env) {
 
   await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, () => worker()));
 
+  const problems = results.filter(item =>
+    !item.ok ||
+    item.canonicalOk === false ||
+    item.indexable === false ||
+    (item.httpStatus && item.httpStatus >= 400) ||
+    (Array.isArray(item.issues) && item.issues.length > 0)
+  );
+
   return {
     ok: true,
     source: 'CuratorOS Site Health',
     generatedAt: new Date().toISOString(),
     linkMapGeneratedAt: source.generatedAt || null,
-    pageCount: results.length,
-    pages: results,
-  };
-}
-
-function compactSnapshot(snapshot) {
-  const pages = (snapshot.pages || []).map(item => ({
-    path: item.path,
-    ok: item.ok !== false,
-    httpStatus: item.httpStatus ?? null,
-    canonicalOk: item.canonicalOk !== false,
-    indexable: item.indexable !== false,
-    issues: Array.isArray(item.issues) ? item.issues.slice(0, 4) : [],
-  }));
-  return {
-    ok: true,
-    source: snapshot.source,
-    generatedAt: snapshot.generatedAt,
-    linkMapGeneratedAt: snapshot.linkMapGeneratedAt,
-    pageCount: pages.length,
-    issuePageCount: pages.filter(p => !p.ok || !p.canonicalOk || !p.indexable || (p.httpStatus && p.httpStatus >= 400)).length,
-    pages,
+    checkedPageCount: results.length,
+    problemPageCount: problems.length,
+    compact: true,
+    pages: problems,
   };
 }
 
@@ -200,13 +183,17 @@ function fetchWithTimeout(url, options, timeoutMs) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+function jsonHeaders() {
+  return {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  };
+}
+
 function json(value, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    },
+    headers: jsonHeaders(),
   });
 }
