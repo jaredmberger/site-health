@@ -1,7 +1,16 @@
 name = "site-health"
-main = "src/index.js"
+main = "src/entry.js"
 compatibility_date = "2026-07-26"
 workers_dev = true
+
+[vars]
+LINK_MAP_SNAPSHOT_URL = "https://link-map.oceanliners.net/api/search-intelligence"
+
+# Required for Search Intelligence integration snapshots.
+# Create a KV namespace and bind it in Cloudflare as:
+# SITE_HEALTH_INTEGRATION_CACHE
+#
+# Existing secrets such as AUDIT_TOKEN and GITHUB_TOKEN remain unchanged.
 
 [observability]
 enabled = true
