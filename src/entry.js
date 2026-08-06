@@ -26,7 +26,7 @@ export default {
         legacySnapshotAvailable = Boolean(cached);
       }
 
-      return json({
+      const payload = {
         ok: true,
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
@@ -46,7 +46,10 @@ export default {
           integrationCacheConfigured: cacheConfigured,
           legacySnapshotAvailable,
         },
-      });
+      };
+
+      const callback = safeCallback(url.searchParams.get('callback'));
+      return callback ? javascript(payload, callback) : json(payload);
     }
 
     // Search Intelligence uses this bounded endpoint for only the pages in its
@@ -79,6 +82,22 @@ export default {
     return core.fetch(request, env, ctx);
   },
 };
+
+function safeCallback(value) {
+  return /^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(String(value || '')) ? String(value) : '';
+}
+
+function javascript(value, callback) {
+  return new Response(`${callback}(${JSON.stringify(value)});`, {
+    status: 200,
+    headers: {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-robots-tag': 'noindex, nofollow, noarchive, nosnippet, noimageindex',
+    },
+  });
+}
 
 function json(value, status = 200) {
   return new Response(JSON.stringify(value), {
