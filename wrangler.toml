@@ -10,6 +10,9 @@ LINK_MAP_SNAPSHOT_URL = "https://link-map.oceanliners.net/api/search-intelligenc
 binding = "SITE_HEALTH_INTEGRATION_CACHE"
 id = "594632c804d045b589724f48dc72c08e"
 
+[triggers]
+crons = ["27 * * * *"]
+
 # Existing secrets such as AUDIT_TOKEN and GITHUB_TOKEN remain unchanged.
 
 [observability]
