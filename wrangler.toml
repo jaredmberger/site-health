@@ -10,6 +10,10 @@ LINK_MAP_SNAPSHOT_URL = "https://link-map.oceanliners.net/api/search-intelligenc
 binding = "SITE_HEALTH_INTEGRATION_CACHE"
 id = "594632c804d045b589724f48dc72c08e"
 
+[[kv_namespaces]]
+binding = "CURATOR_ERROR_RECORDS"
+id = "447306da3a754b44830d2ac8608322c0"
+
 [triggers]
 crons = ["27 * * * *"]
 
