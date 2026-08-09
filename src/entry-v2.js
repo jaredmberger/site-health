@@ -53,7 +53,10 @@ export default {
 async function injectReporter(response, method) {
   if (method === 'HEAD' || !(response.headers.get('content-type') || '').includes('text/html')) return response;
   const html = await response.text();
-  if (html.includes('errors.oceanliners.net/client-reporter.js')) return new Response(html, response);
+  if (html.includes('errors.oceanliners.net/client-reporter.js')) return rebuild(response, html);
   const enhanced = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${REPORTER}</head>`) : `${REPORTER}${html}`;
-  return new Response(enhanced, { status: response.status, statusText: response.statusText, headers: response.headers });
+  return rebuild(response, enhanced);
+}
+function rebuild(response, body) {
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
