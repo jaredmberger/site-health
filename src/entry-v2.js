@@ -2,11 +2,13 @@ import base from './entry.js';
 import { reportSystemError, reportSystemSuccess } from './error-bus.js';
 
 const SOURCE = 'Site Health';
+const REPORTER = '<script src="https://errors.oceanliners.net/client-reporter.js?v=20260809-1"></script>';
 
 export default {
   async fetch(request, env, ctx) {
     try {
-      return await base.fetch(request, env, ctx);
+      const response = await base.fetch(request, env, ctx);
+      return injectReporter(response, request.method);
     } catch (error) {
       ctx?.waitUntil?.(reportSystemError(env, {
         source: SOURCE,
@@ -47,3 +49,11 @@ export default {
     })());
   }
 };
+
+async function injectReporter(response, method) {
+  if (method === 'HEAD' || !(response.headers.get('content-type') || '').includes('text/html')) return response;
+  const html = await response.text();
+  if (html.includes('errors.oceanliners.net/client-reporter.js')) return new Response(html, response);
+  const enhanced = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${REPORTER}</head>`) : `${REPORTER}${html}`;
+  return new Response(enhanced, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
