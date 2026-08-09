@@ -4,6 +4,7 @@ import { runSiteHealthMonitor, readSiteHealthSnapshot } from './site-health-moni
 
 const CACHE_KEY = 'search-intelligence:site-health:v3';
 const BOOTSTRAP_LOCK = 'site-health:baseline-bootstrap-lock:v1';
+const BUILD = 'site-health-monitor-20260809-1';
 
 export default {
   async fetch(request, env, ctx) {
@@ -15,16 +16,16 @@ export default {
 
     if (url.pathname === '/api/site-health-snapshot') {
       if (request.method !== 'GET') return json({ ok: false, error: 'Method not allowed.' }, 405);
-      return json({ ok: true, snapshot: await readSiteHealthSnapshot(env) });
+      return json({ ok: true, build: BUILD, snapshot: await readSiteHealthSnapshot(env) });
     }
 
     if (url.pathname === '/api/site-health-monitor') {
-      if (request.method === 'GET') return json({ ok: true, snapshot: await readSiteHealthSnapshot(env) });
+      if (request.method === 'GET') return json({ ok: true, build: BUILD, snapshot: await readSiteHealthSnapshot(env) });
       if (request.method !== 'POST') return json({ ok: false, error: 'Method not allowed.' }, 405);
       try {
-        return json({ ok: true, snapshot: await runSiteHealthMonitor(env) });
+        return json({ ok: true, build: BUILD, snapshot: await runSiteHealthMonitor(env) });
       } catch (error) {
-        return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+        return json({ ok: false, build: BUILD, error: error instanceof Error ? error.message : String(error) }, 500);
       }
     }
 
@@ -45,17 +46,15 @@ export default {
       }
 
       const payload = buildIntelligencePayload(snapshot, cacheConfigured, legacySnapshotAvailable);
+      payload.build = BUILD;
       const callback = safeCallback(url.searchParams.get('callback'));
       return callback ? javascript(payload, callback) : json(payload);
     }
 
-    // Search Intelligence uses this bounded endpoint for only the pages in its
-    // active action queue. It intentionally bypasses the full-site audit path.
     if (url.pathname === '/api/search-intelligence/check') {
       return handleSearchIntelligenceBatch(request);
     }
 
-    // Keep the legacy snapshot route as a lightweight compatibility/status endpoint.
     if (url.pathname === '/api/search-intelligence') {
       if (request.method !== 'GET') return json({ ok: false, error: 'Method not allowed.' }, 405);
       if (!env.SITE_HEALTH_INTEGRATION_CACHE) return json({ ok: false, pages: [], error: 'SITE_HEALTH_INTEGRATION_CACHE is not configured.' }, 503);
