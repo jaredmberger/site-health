@@ -4,7 +4,9 @@ import { runSiteHealthMonitor, readSiteHealthSnapshot } from './site-health-moni
 
 const CACHE_KEY = 'search-intelligence:site-health:v3';
 const BOOTSTRAP_LOCK = 'site-health:baseline-bootstrap-lock:v1';
-const BUILD = 'site-health-monitor-20260809-1';
+const STALE_REFRESH_LOCK = 'site-health:stale-refresh-lock:v1';
+const STALE_AFTER_MS = 90 * 60 * 1000;
+const BUILD = 'site-health-monitor-20260810-2';
 
 export default {
   async fetch(request, env, ctx) {
@@ -16,11 +18,17 @@ export default {
 
     if (url.pathname === '/api/site-health-snapshot') {
       if (request.method !== 'GET') return json({ ok: false, error: 'Method not allowed.' }, 405);
-      return json({ ok: true, build: BUILD, snapshot: await readSiteHealthSnapshot(env) });
+      const snapshot = await readSiteHealthSnapshot(env);
+      maybeRefreshStaleSnapshot(env, ctx, snapshot);
+      return json({ ok: true, build: BUILD, snapshot });
     }
 
     if (url.pathname === '/api/site-health-monitor') {
-      if (request.method === 'GET') return json({ ok: true, build: BUILD, snapshot: await readSiteHealthSnapshot(env) });
+      if (request.method === 'GET') {
+        const snapshot = await readSiteHealthSnapshot(env);
+        maybeRefreshStaleSnapshot(env, ctx, snapshot);
+        return json({ ok: true, build: BUILD, snapshot });
+      }
       if (request.method !== 'POST') return json({ ok: false, error: 'Method not allowed.' }, 405);
       try {
         return json({ ok: true, build: BUILD, snapshot: await runSiteHealthMonitor(env) });
@@ -43,6 +51,7 @@ export default {
         legacySnapshotAvailable = Boolean(cached);
         snapshot = retained;
         if (!snapshot) maybeBootstrap(env, ctx);
+        else maybeRefreshStaleSnapshot(env, ctx, snapshot);
       }
 
       const payload = buildIntelligencePayload(snapshot, cacheConfigured, legacySnapshotAvailable);
@@ -79,6 +88,26 @@ function maybeBootstrap(env, ctx) {
     try { await runSiteHealthMonitor(env); }
     catch (error) { console.error('Site Health baseline bootstrap failed', error); }
   })());
+}
+
+function maybeRefreshStaleSnapshot(env, ctx, snapshot) {
+  if (!env.SITE_HEALTH_INTEGRATION_CACHE || !ctx?.waitUntil || !isSnapshotStale(snapshot)) return;
+  ctx.waitUntil((async () => {
+    const lock = await env.SITE_HEALTH_INTEGRATION_CACHE.get(STALE_REFRESH_LOCK);
+    if (lock) return;
+    await env.SITE_HEALTH_INTEGRATION_CACHE.put(STALE_REFRESH_LOCK, new Date().toISOString(), { expirationTtl: 300 });
+    try {
+      await runSiteHealthMonitor(env);
+      console.log('Site Health stale snapshot self-refresh completed.');
+    } catch (error) {
+      console.error('Site Health stale snapshot self-refresh failed', error);
+    }
+  })());
+}
+
+function isSnapshotStale(snapshot) {
+  const time = new Date(snapshot?.generatedAt || 0).getTime();
+  return !Number.isFinite(time) || Date.now() - time > STALE_AFTER_MS;
 }
 
 function buildIntelligencePayload(snapshot, cacheConfigured, legacySnapshotAvailable) {
