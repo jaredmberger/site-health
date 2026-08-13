@@ -27,8 +27,8 @@ The stable findings contract is documented in [`docs/findings.schema.json`](docs
 1. Create or connect a Worker to this GitHub repository.
 2. Use the repository root as the project root.
 3. Build command: `npm install`
-4. Deploy command: `npx wrangler deploy`
+4. Deploy command: `npx wrangler deploy --config wrangler.toml`
 5. Add the encrypted Worker secret `AUDIT_TOKEN`.
 6. Attach the custom domain `site-health.oceanliners.net`.
 
-The dashboard is served at `/`. The Worker source lives at `src/index.js`.
+The dashboard is served at `/`. The active Worker entrypoint is configured in `wrangler.toml` and currently resolves to `src/entry-v2.1.js`, which layers the Curator Ops runtime/freshness endpoints over the existing Site Health application.
