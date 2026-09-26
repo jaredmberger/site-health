@@ -1,0 +1,19 @@
+name: Recovery checks
+on:
+  pull_request:
+    paths: ['src/entry-v2.1.js','scripts/validate-recovery-backup.mjs','tests/recovery-export-safety.test.mjs','.github/workflows/recovery.yml']
+  push:
+    branches: [main]
+    paths: ['src/entry-v2.1.js','scripts/validate-recovery-backup.mjs','tests/recovery-export-safety.test.mjs','.github/workflows/recovery.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: node --check src/entry-v2.1.js
+      - run: node --test tests/recovery-export-safety.test.mjs
