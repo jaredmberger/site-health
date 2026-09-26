@@ -32,3 +32,7 @@ The stable findings contract is documented in [`docs/findings.schema.json`](docs
 6. Attach the custom domain `site-health.oceanliners.net`.
 
 The dashboard is served at `/`. The active Worker entrypoint is configured in `wrangler.toml` and currently resolves to `src/entry-v2.1.js`, which layers the Curator Ops runtime/freshness endpoints over the existing Site Health application.
+
+## Disaster recovery
+
+The complete primary `SITE_HEALTH_INTEGRATION_CACHE` namespace can be exported through authenticated `GET /api/recovery-export`. Configure the secret `RECOVERY_EXPORT_TOKEN`; the route remains disabled if the secret is absent. The shared `CURATOR_ERROR_RECORDS` namespace is intentionally excluded because Error Bus owns its authoritative recovery path. See [`RECOVERY_EXPORT.md`](RECOVERY_EXPORT.md).
