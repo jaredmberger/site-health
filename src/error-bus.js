@@ -6,12 +6,12 @@ const RECOVERY_STATE_PREFIX='quiet-recovery:';
 const STATE_TTL=60*60*24*14;
 const RECOVERED_TTL=60*60*24*180;
 
-export async function reportSystemError(env,{source,component,error,severity='p1',type='runtime-error',context={},confirmAfter=1}){
+export async function reportSystemError(env,{source,component,error,severity='p1',type='runtime-error',context={},confirmAfter=null}){
   if(!env.CURATOR_ERROR_RECORDS)return null;
 
   const message=error instanceof Error?error.message:String(error||'Unknown error');
   const now=new Date().toISOString();
-  const threshold=boundedInt(confirmAfter,1,20,1);
+  const threshold=resolveConfirmAfter(confirmAfter,type,component);
   const failureKey=quietKey(FAILURE_STATE_PREFIX,source,component);
   const recoveryKey=quietKey(RECOVERY_STATE_PREFIX,source,component);
 
@@ -63,7 +63,7 @@ export async function reportSystemError(env,{source,component,error,severity='p1
   return incident;
 }
 
-export async function reportSystemSuccess(env,{source,component,message='Component completed successfully.',maxAgeMinutes=180,context={},recoverAfter=1}){
+export async function reportSystemSuccess(env,{source,component,message='Component completed successfully.',maxAgeMinutes=180,context={},recoverAfter=null}){
   if(!env.CURATOR_ERROR_RECORDS)return;
 
   const now=new Date().toISOString();
@@ -89,7 +89,7 @@ export async function reportSystemSuccess(env,{source,component,message='Compone
     return;
   }
 
-  const threshold=boundedInt(recoverAfter,1,20,1);
+  const threshold=resolveRecoverAfter(recoverAfter,component,maxAgeMinutes);
   if(threshold>1){
     const prior=await env.CURATOR_ERROR_RECORDS.get(recoveryKey,'json');
     const recovery={
@@ -142,6 +142,19 @@ async function fingerprintFor(source,component,type,message){
 
 function quietKey(prefix,source,component){
   return `${prefix}${slug(source)}:${slug(component)}`;
+}
+
+function resolveConfirmAfter(value,type,component){
+  if(value!=null)return boundedInt(value,1,20,1);
+  const scheduled=String(type||'').startsWith('scheduled-')||String(component||'').includes('scheduled')||String(component||'').includes('watchtower');
+  return scheduled?3:1;
+}
+
+function resolveRecoverAfter(value,component,maxAgeMinutes){
+  if(value!=null)return boundedInt(value,1,20,1);
+  const scheduled=String(component||'').includes('scheduled')||String(component||'').includes('watchtower');
+  if(!scheduled)return 1;
+  return Number(maxAgeMinutes||0)<=360?2:1;
 }
 
 function boundedInt(value,min,max,fallback){
