@@ -1,5 +1,173 @@
-const INCIDENT_PREFIX='incident:',HEARTBEAT_PREFIX='heartbeat:',EVENT_PREFIX='event:';
-export async function reportSystemError(env,{source,component,error,severity='p1',type='runtime-error',context={}}){if(!env.CURATOR_ERROR_RECORDS)return null;const message=error instanceof Error?error.message:String(error||'Unknown error'),now=new Date().toISOString(),fingerprint=await fp(source,component,type,message),key=INCIDENT_PREFIX+fingerprint,previous=await env.CURATOR_ERROR_RECORDS.get(key,'json');const incident={id:previous?.id||`incident_${fingerprint.slice(0,20)}`,fingerprint,source,component,severity:norm(severity),type,message,context:safe(context),firstSeenAt:previous?.firstSeenAt||now,lastSeenAt:now,occurrences:Number(previous?.occurrences||0)+1,status:'active',recoveredAt:null,recoveryMessage:null};await env.CURATOR_ERROR_RECORDS.put(key,JSON.stringify(incident));await event(env,'incident',incident);return incident;}
-export async function reportSystemSuccess(env,{source,component,message='Component completed successfully.',maxAgeMinutes=180,context={}}){if(!env.CURATOR_ERROR_RECORDS)return;const now=new Date().toISOString();await env.CURATOR_ERROR_RECORDS.put(`${HEARTBEAT_PREFIX}${slug(source)}:${slug(component)}`,JSON.stringify({source,component,status:'ok',message,at:now,maxAgeMinutes,context:safe(context)}));const listed=await env.CURATOR_ERROR_RECORDS.list({prefix:INCIDENT_PREFIX,limit:1000});for(const key of listed.keys){const i=await env.CURATOR_ERROR_RECORDS.get(key.name,'json');if(!i||i.status!=='active'||i.source!==source||i.component!==component)continue;const r={...i,status:'recovered',recoveredAt:now,lastSuccessfulAt:now,recoveryMessage:message};await env.CURATOR_ERROR_RECORDS.put(key.name,JSON.stringify(r),{expirationTtl:15552000});await event(env,'recovery',r);}}
-async function event(env,kind,i){const at=new Date().toISOString();await env.CURATOR_ERROR_RECORDS.put(`${EVENT_PREFIX}${at}:${Math.random().toString(36).slice(2,8)}`,JSON.stringify({kind,at,incidentId:i.id,fingerprint:i.fingerprint,source:i.source,component:i.component,severity:i.severity,status:i.status,message:i.message}),{expirationTtl:15552000});}
-async function fp(s,c,t,m){const n=`${s}|${c}|${t}|${m}`.toLowerCase().replace(/\d{4}-\d\d-\d\d[t ][\d:.z+-]+/g,'<timestamp>').replace(/\b\d{6,}\b/g,'<number>'),h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(n));return[...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,40)}function norm(v){v=String(v||'').toLowerCase();return['p0','critical'].includes(v)?'p0':['p1','high'].includes(v)?'p1':'p2'}function slug(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'unknown'}function safe(v){const o={};if(!v||typeof v!=='object')return o;for(const[k,x]of Object.entries(v).slice(0,30)){if(/token|secret|password|authorization|cookie/i.test(k))continue;if(x==null||['string','number','boolean'].includes(typeof x))o[String(k).slice(0,80)]=typeof x==='string'?x.slice(0,1000):x}return o}
+const INCIDENT_PREFIX='incident:';
+const HEARTBEAT_PREFIX='heartbeat:';
+const EVENT_PREFIX='event:';
+const FAILURE_STATE_PREFIX='quiet-failure:';
+const RECOVERY_STATE_PREFIX='quiet-recovery:';
+const STATE_TTL=60*60*24*14;
+const RECOVERED_TTL=60*60*24*180;
+
+export async function reportSystemError(env,{source,component,error,severity='p1',type='runtime-error',context={},confirmAfter=1}){
+  if(!env.CURATOR_ERROR_RECORDS)return null;
+
+  const message=error instanceof Error?error.message:String(error||'Unknown error');
+  const now=new Date().toISOString();
+  const threshold=boundedInt(confirmAfter,1,20,1);
+  const failureKey=quietKey(FAILURE_STATE_PREFIX,source,component);
+  const recoveryKey=quietKey(RECOVERY_STATE_PREFIX,source,component);
+
+  await env.CURATOR_ERROR_RECORDS.delete(recoveryKey);
+
+  let confirmation=null;
+  if(threshold>1){
+    const prior=await env.CURATOR_ERROR_RECORDS.get(failureKey,'json');
+    confirmation={
+      source,
+      component,
+      type,
+      failureStreak:Number(prior?.failureStreak||0)+1,
+      confirmAfter:threshold,
+      firstFailureAt:prior?.firstFailureAt||now,
+      lastFailureAt:now,
+      lastMessage:message
+    };
+    await env.CURATOR_ERROR_RECORDS.put(failureKey,JSON.stringify(confirmation),{expirationTtl:STATE_TTL});
+
+    if(confirmation.failureStreak<threshold){
+      return {status:'observing',...confirmation};
+    }
+  }
+
+  const fingerprint=await fingerprintFor(source,component,type,message);
+  const key=INCIDENT_PREFIX+fingerprint;
+  const previous=await env.CURATOR_ERROR_RECORDS.get(key,'json');
+  const incident={
+    id:previous?.id||`incident_${fingerprint.slice(0,20)}`,
+    fingerprint,
+    source,
+    component,
+    severity:normalizeSeverity(severity),
+    type,
+    message,
+    context:sanitize(context),
+    confirmation:confirmation?{failureStreak:confirmation.failureStreak,confirmAfter:threshold}:null,
+    firstSeenAt:previous?.firstSeenAt||now,
+    lastSeenAt:now,
+    occurrences:Number(previous?.occurrences||0)+1,
+    status:'active',
+    recoveredAt:null,
+    recoveryMessage:null
+  };
+
+  await env.CURATOR_ERROR_RECORDS.put(key,JSON.stringify(incident));
+  await writeEvent(env,'incident',incident);
+  return incident;
+}
+
+export async function reportSystemSuccess(env,{source,component,message='Component completed successfully.',maxAgeMinutes=180,context={},recoverAfter=1}){
+  if(!env.CURATOR_ERROR_RECORDS)return;
+
+  const now=new Date().toISOString();
+  const failureKey=quietKey(FAILURE_STATE_PREFIX,source,component);
+  const recoveryKey=quietKey(RECOVERY_STATE_PREFIX,source,component);
+
+  await env.CURATOR_ERROR_RECORDS.put(
+    `${HEARTBEAT_PREFIX}${slug(source)}:${slug(component)}`,
+    JSON.stringify({source,component,status:'ok',message,at:now,maxAgeMinutes,context:sanitize(context)})
+  );
+  await env.CURATOR_ERROR_RECORDS.delete(failureKey);
+
+  const listed=await env.CURATOR_ERROR_RECORDS.list({prefix:INCIDENT_PREFIX,limit:1000});
+  const active=[];
+  for(const key of listed.keys){
+    const incident=await env.CURATOR_ERROR_RECORDS.get(key.name,'json');
+    if(!incident||incident.status!=='active'||incident.source!==source||incident.component!==component)continue;
+    active.push([key.name,incident]);
+  }
+
+  if(!active.length){
+    await env.CURATOR_ERROR_RECORDS.delete(recoveryKey);
+    return;
+  }
+
+  const threshold=boundedInt(recoverAfter,1,20,1);
+  if(threshold>1){
+    const prior=await env.CURATOR_ERROR_RECORDS.get(recoveryKey,'json');
+    const recovery={
+      source,
+      component,
+      cleanStreak:Number(prior?.cleanStreak||0)+1,
+      recoverAfter:threshold,
+      firstCleanAt:prior?.firstCleanAt||now,
+      lastCleanAt:now
+    };
+    await env.CURATOR_ERROR_RECORDS.put(recoveryKey,JSON.stringify(recovery),{expirationTtl:STATE_TTL});
+    if(recovery.cleanStreak<threshold)return;
+  }
+
+  for(const [key,incident] of active){
+    const recovered={...incident,status:'recovered',recoveredAt:now,lastSuccessfulAt:now,recoveryMessage:message};
+    await env.CURATOR_ERROR_RECORDS.put(key,JSON.stringify(recovered),{expirationTtl:RECOVERED_TTL});
+    await writeEvent(env,'recovery',recovered);
+  }
+  await env.CURATOR_ERROR_RECORDS.delete(recoveryKey);
+}
+
+async function writeEvent(env,kind,incident){
+  const stamp=new Date().toISOString();
+  await env.CURATOR_ERROR_RECORDS.put(
+    `${EVENT_PREFIX}${stamp}:${Math.random().toString(36).slice(2,8)}`,
+    JSON.stringify({
+      kind,
+      at:stamp,
+      incidentId:incident.id,
+      fingerprint:incident.fingerprint,
+      source:incident.source,
+      component:incident.component,
+      severity:incident.severity,
+      status:incident.status,
+      message:incident.message
+    }),
+    {expirationTtl:RECOVERED_TTL}
+  );
+}
+
+async function fingerprintFor(source,component,type,message){
+  const normalized=`${source}|${component}|${type}|${message}`
+    .toLowerCase()
+    .replace(/\d{4}-\d\d-\d\d[t ][\d:.z+-]+/g,'<timestamp>')
+    .replace(/\b\d{6,}\b/g,'<number>');
+  const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(normalized));
+  return [...new Uint8Array(hash)].map(byte=>byte.toString(16).padStart(2,'0')).join('').slice(0,40);
+}
+
+function quietKey(prefix,source,component){
+  return `${prefix}${slug(source)}:${slug(component)}`;
+}
+
+function boundedInt(value,min,max,fallback){
+  const n=Number.parseInt(value,10);
+  return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
+}
+
+function normalizeSeverity(value){
+  const v=String(value||'').toLowerCase();
+  if(['p0','critical'].includes(v))return'p0';
+  if(['p1','high'].includes(v))return'p1';
+  return'p2';
+}
+
+function slug(value){
+  return String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'unknown';
+}
+
+function sanitize(value){
+  const out={};
+  if(!value||typeof value!=='object')return out;
+  for(const [key,item] of Object.entries(value).slice(0,30)){
+    if(/token|secret|password|authorization|cookie/i.test(key))continue;
+    if(item==null||['string','number','boolean'].includes(typeof item)){
+      out[String(key).slice(0,80)]=typeof item==='string'?item.slice(0,1000):item;
+    }
+  }
+  return out;
+}
