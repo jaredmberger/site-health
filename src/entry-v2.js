@@ -35,6 +35,7 @@ export default {
           component: 'scheduled-monitor',
           message: 'Scheduled Site Health monitor completed successfully.',
           maxAgeMinutes: 180,
+          recoverAfter: 2,
         });
       } catch (error) {
         await reportSystemError(env, {
@@ -43,6 +44,7 @@ export default {
           error,
           severity: 'p1',
           type: 'scheduled-monitor-error',
+          confirmAfter: 3,
         });
         console.error('Site Health scheduled monitor failed', error);
       }
