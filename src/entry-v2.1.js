@@ -16,7 +16,7 @@ export default {
   async scheduled(controller, env, ctx){ return base.scheduled(controller, env, ctx); }
 };
 
-function runtimePayload(env){const meta=env.CF_VERSION_METADATA||{};return{ok:true,service:SERVICE,version:'2.1.0',repository:REPOSITORY,runtime:'cloudflare-workers',cloudflareVersion:{id:meta.id||null,tag:meta.tag||null,timestamp:meta.timestamp||null},build:BUILD_META,observedAt:new Date().toISOString()};}
+function runtimePayload(env){const meta=env.CF_VERSION_METADATA||{};return{ok:true,contractVersion:1,service:SERVICE,repository:REPOSITORY,productionBranch:'main',version:'2.1.0',commit:BUILD_META.commit||null,cloudflareDeploymentId:meta.id||null,runtime:'cloudflare-workers',cloudflareVersion:{id:meta.id||null,tag:meta.tag||null,timestamp:meta.timestamp||null},build:BUILD_META,observedAt:new Date().toISOString()};}
 async function opsHealth(env){const hb=env.CURATOR_ERROR_RECORDS?await env.CURATOR_ERROR_RECORDS.get(HEARTBEAT_KEY,'json'):null;return freshness(hb,'hourly',27);}
 function freshness(hb,schedule,minute){const at=hb?.at||null,maxAgeMinutes=Number(hb?.maxAgeMinutes||180),ageMinutes=at?Math.floor((Date.now()-Date.parse(at))/60000):null,stale=ageMinutes==null?null:ageMinutes>maxAgeMinutes;return{ok:stale!==true,service:SERVICE,schedule:{cadence:schedule,minute},lastSuccessAt:at,ageMinutes,maxAgeMinutes,stale,status:stale===true?'stale':at?'healthy':'unknown',heartbeat:hb?{component:hb.component||null,message:hb.message||null}:null,checkedAt:new Date().toISOString()};}
 function json(v,s=200){return new Response(JSON.stringify(v,null,2),{status:s,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','access-control-allow-origin':'*'}});}
